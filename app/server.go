@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	// Uncomment this block to pass the first stage
@@ -45,7 +47,8 @@ func run() error {
 }
 
 var routes = map[string]struct{}{
-	"/": {},
+	"/":     {},
+	"/echo": {},
 }
 
 func handleConn(conn net.Conn) {
@@ -53,7 +56,7 @@ func handleConn(conn net.Conn) {
 		buf := make([]byte, 1024)
 		_, err := conn.Read(buf)
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 				fmt.Println("connection was closed")
 				break
 			}
@@ -68,17 +71,7 @@ func handleConn(conn net.Conn) {
 			continue
 		}
 
-		if !routeExists(request.urlPath) {
-			err = respond(conn, Response{status: 404, statusText: "Not Found"})
-			if err != nil {
-				fmt.Println("ERROR:,", err)
-			}
-		}
-
-		err = respond(conn, Response{200, "OK"})
-		if err != nil {
-			fmt.Println("ERROR:,", err)
-		}
+		handleRoute(conn, request)
 	}
 	conn.Close()
 }
@@ -156,16 +149,70 @@ func routeExists(urlPath string) bool {
 	return ok
 }
 
+func handleRoute(conn net.Conn, req *Request) {
+	url := strings.TrimSuffix(req.urlPath, "/")
+
+	switch {
+	case strings.HasPrefix(url, "/echo"):
+		handleEcho(conn, strings.TrimPrefix(url, "/echo/"))
+	case url == "":
+		respond(conn, NewResponse(200, "", nil))
+	default:
+		fmt.Printf("route not found: %s\n", url)
+		respond(conn, NewResponse(404, "", nil))
+	}
+}
+
+func handleEcho(conn net.Conn, msg string) {
+	respond(conn, NewResponse(200, msg, nil))
+}
+
+// TODO: parse url func
+
 type Response struct {
 	status     int
 	statusText string
+	headers    map[string]string
+	body       string
+}
+
+func NewResponse(status int, body string, headers map[string]string) *Response {
+	respHeaders := make(map[string]string)
+	for k, v := range headers {
+		respHeaders[k] = v
+	}
+	respHeaders["Content-Length"] = strconv.Itoa(len(body))
+	respHeaders["Content-Type"] = "text/plain"
+	return &Response{
+		status:     status,
+		statusText: statusCodeToText[status],
+		headers:    respHeaders,
+		body:       body,
+	}
+}
+
+var statusCodeToText = map[int]string{
+	200: "OK",
+	400: "Bad Request",
+	404: "Not Found",
+	500: "Internal Server Error",
 }
 
 func (r Response) String() string {
-	return fmt.Sprintf("%s %d %s\r\n\r\n", HTTPVersion, r.status, r.statusText)
+	var b strings.Builder
+	// Status line
+	b.WriteString(fmt.Sprintf("%s %d %s\r\n", HTTPVersion, r.status, r.statusText))
+	// Add any headers
+	for k, v := range r.headers {
+		b.WriteString(fmt.Sprintf("%s: %v\r\n", k, v))
+	}
+	b.WriteString("\r\n")
+	b.WriteString(r.body)
+	return b.String()
 }
 
-func respond(conn net.Conn, resp Response) error {
+func respond(conn net.Conn, resp *Response) error {
+	fmt.Println("--> Responding with:", resp.String())
 	_, err := conn.Write([]byte(resp.String()))
 	return err
 }
