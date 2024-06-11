@@ -114,6 +114,7 @@ func parseRequest(data []byte) (*Request, error) {
 			request.body = line
 		}
 	}
+	request.headers = headers
 	return &request, nil
 }
 
@@ -141,7 +142,8 @@ func parseHeader(line []byte) (string, string, error) {
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("invalid header format")
 	}
-	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+	headerKey := strings.ToLower(strings.TrimSpace(parts[0]))
+	return headerKey, strings.TrimSpace(parts[1]), nil
 }
 
 func routeExists(urlPath string) bool {
@@ -155,6 +157,8 @@ func handleRoute(conn net.Conn, req *Request) {
 	switch {
 	case strings.HasPrefix(url, "/echo"):
 		handleEcho(conn, strings.TrimPrefix(url, "/echo/"))
+	case strings.HasPrefix(url, "/user-agent"):
+		handleUserAgent(conn, req)
 	case url == "":
 		respond(conn, NewResponse(200, "", nil))
 	default:
@@ -165,6 +169,16 @@ func handleRoute(conn net.Conn, req *Request) {
 
 func handleEcho(conn net.Conn, msg string) {
 	respond(conn, NewResponse(200, msg, nil))
+}
+
+func handleUserAgent(conn net.Conn, req *Request) {
+	fmt.Println("--> req headers:", req.headers)
+	ua, ok := req.headers["user-agent"]
+	if !ok {
+		respond(conn, NewResponse(400, "User agent not provided", nil))
+		return
+	}
+	respond(conn, NewResponse(200, ua, nil))
 }
 
 // TODO: parse url func
