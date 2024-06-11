@@ -36,12 +36,14 @@ func run() error {
 	}
 	defer func() { _ = l.Close() }()
 
-	// TODO: handle signals, then loop on connections
-	conn, err := l.Accept()
-	if err != nil {
-		return fmt.Errorf("error accepting connection: %w", err)
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error accepting connection: %v", err)
+			continue
+		}
+		go handleConn(conn)
 	}
-	handleConn(conn)
 
 	return nil
 }
