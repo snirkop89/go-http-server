@@ -119,7 +119,12 @@ func parseRequest(data []byte) (*Request, error) {
 		// Blank line separator
 
 		default:
-			request.body = line
+			idx := bytes.Index(line, []byte("\x00"))
+			if idx != -1 {
+				request.body = line[:idx]
+			} else {
+				request.body = line
+			}
 		}
 	}
 	request.headers = headers
@@ -168,7 +173,12 @@ func handleRoute(conn net.Conn, req *Request, filesDir string) {
 	case strings.HasPrefix(url, "/user-agent"):
 		handleUserAgent(conn, req)
 	case strings.HasPrefix(url, "/files"):
-		handleServeFile(conn, req, filesDir)
+		switch req.method {
+		case "GET":
+			handleServeFile(conn, req, filesDir)
+		case "POST":
+			handleSaveFile(conn, req, filesDir)
+		}
 	case url == "":
 		respond(conn, NewResponse(200, "", nil))
 	default:
@@ -212,6 +222,23 @@ func handleServeFile(conn net.Conn, req *Request, filesDir string) {
 	respond(conn, NewResponse(200, string(data), map[string]string{"Content-Type": "application/octet-stream"}))
 }
 
+func handleSaveFile(conn net.Conn, req *Request, filesDir string) {
+	fmt.Printf("req body: %q", string(req.body))
+	file := strings.TrimPrefix(req.urlPath, "/files/")
+	f, err := os.Create(filepath.Join(filesDir, file))
+	if err != nil {
+		respond(conn, NewResponse(500, "", nil))
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(req.body)
+	if err != nil {
+		respond(conn, NewResponse(500, "", nil))
+		return
+	}
+	respond(conn, NewResponse(201, "", nil))
+}
+
 // TODO: parse url func
 
 type Response struct {
@@ -241,6 +268,7 @@ func NewResponse(status int, body string, headers map[string]string) *Response {
 
 var statusCodeToText = map[int]string{
 	200: "OK",
+	201: "Created",
 	400: "Bad Request",
 	404: "Not Found",
 	500: "Internal Server Error",
