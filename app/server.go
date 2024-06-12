@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -30,6 +33,9 @@ func main() {
 }
 
 func run() error {
+	dir := flag.String("directory", "/tmp/", "Directory to serve files from")
+	flag.Parse()
+
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
 		return fmt.Errorf("failed to bind to port 4221: %w", err)
@@ -42,7 +48,7 @@ func run() error {
 			fmt.Fprintf(os.Stderr, "error accepting connection: %v", err)
 			continue
 		}
-		go handleConn(conn)
+		go handleConn(conn, *dir)
 	}
 
 	return nil
@@ -53,7 +59,7 @@ var routes = map[string]struct{}{
 	"/echo": {},
 }
 
-func handleConn(conn net.Conn) {
+func handleConn(conn net.Conn, fileDir string) {
 	for {
 		buf := make([]byte, 1024)
 		_, err := conn.Read(buf)
@@ -73,7 +79,7 @@ func handleConn(conn net.Conn) {
 			continue
 		}
 
-		handleRoute(conn, request)
+		handleRoute(conn, request, fileDir)
 	}
 	conn.Close()
 }
@@ -153,7 +159,7 @@ func routeExists(urlPath string) bool {
 	return ok
 }
 
-func handleRoute(conn net.Conn, req *Request) {
+func handleRoute(conn net.Conn, req *Request, filesDir string) {
 	url := strings.TrimSuffix(req.urlPath, "/")
 
 	switch {
@@ -161,6 +167,8 @@ func handleRoute(conn net.Conn, req *Request) {
 		handleEcho(conn, strings.TrimPrefix(url, "/echo/"))
 	case strings.HasPrefix(url, "/user-agent"):
 		handleUserAgent(conn, req)
+	case strings.HasPrefix(url, "/files"):
+		handleServeFile(conn, req, filesDir)
 	case url == "":
 		respond(conn, NewResponse(200, "", nil))
 	default:
@@ -183,6 +191,27 @@ func handleUserAgent(conn net.Conn, req *Request) {
 	respond(conn, NewResponse(200, ua, nil))
 }
 
+func handleServeFile(conn net.Conn, req *Request, filesDir string) {
+	file := strings.TrimPrefix(req.urlPath, "/files/")
+	f, err := os.Open(filepath.Join(filesDir, file))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			respond(conn, NewResponse(404, "", nil))
+		} else {
+			respond(conn, NewResponse(500, "", nil))
+		}
+		return
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		respond(conn, NewResponse(500, "", nil))
+		return
+	}
+	respond(conn, NewResponse(200, string(data), map[string]string{"Content-Type": "application/octet-stream"}))
+}
+
 // TODO: parse url func
 
 type Response struct {
@@ -194,11 +223,14 @@ type Response struct {
 
 func NewResponse(status int, body string, headers map[string]string) *Response {
 	respHeaders := make(map[string]string)
+	respHeaders["Content-Length"] = strconv.Itoa(len(body))
+	respHeaders["Content-Type"] = "text/plain"
+
+	// Override with your provided headers
 	for k, v := range headers {
 		respHeaders[k] = v
 	}
-	respHeaders["Content-Length"] = strconv.Itoa(len(body))
-	respHeaders["Content-Type"] = "text/plain"
+
 	return &Response{
 		status:     status,
 		statusText: statusCodeToText[status],
